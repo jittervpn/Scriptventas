@@ -1,504 +1,268 @@
 #!/bin/bash
 # ============================================
-#   JITTER SSH MANAGER - VERSIÓN CORREGIDA
+# JITTER SSH MANAGER
 # ============================================
 
 # Colores
-R="\033[1;31m"
-V="\033[1;32m"
-A="\033[1;33m"
-AZ="\033[1;34m"
-M="\033[1;35m"
-C="\033[1;36m"
-B="\033[1;37m"
-GRIS="\033[0;37m"
-N="\033[0m"
+R="\033[1;31m"; V="\033[1;32m"; A="\033[1;33m"; AZ="\033[1;34m"; M="\033[1;35m"; C="\033[1;36m"; B="\033[1;37m"; N="\033[0m"
 
-# Rutas
-DIR_CONF="/etc/JitterVPN"
-DB_USUARIOS="$DIR_CONF/usuarios.db"
-BANNER_SSH="/etc/ssh/banner.txt"
-BANNER_DROPBEAR="/etc/dropbear/banner.txt"
+[ "$EUID" -ne 0 ] && { echo -e "${R}Ejecutá como root${N}"; exit 1; }
 
-# Verificar root
-[ "$EUID" -ne 0 ] && { echo -e "${R}❌ Ejecutá como ROOT${N}"; exit 1; }
+pausa(){ echo ""; read -p "Presioná ENTER para continuar..."; }
 
-# Crear carpetas
-mkdir -p "$DIR_CONF" /etc/dropbear
-touch "$DB_USUARIOS" /var/log/jitter-acciones.log
+# -------- INSTALAR BANNER DE LOGIN --------
+instalar_banner_login(){
+  cat > /etc/jitter-banner.sh <<'EOF'
+#!/bin/bash
+# Banner que muestra días restantes al conectar
+R="\033[1;31m"; V="\033[1;32m"; A="\033[1;33m"; M="\033[1;35m"; C="\033[1;36m"; B="\033[1;37m"; N="\033[0m"
 
-# Funciones
-pausa(){
-  echo -e "\n${GRIS}──────────────────────────────────────────${N}"
-  read -p "✨ Presioná ENTER para continuar..."
+USER=$(whoami)
+# Solo mostrar para usuarios normales, no root
+[[ "$USER" == "root" ]] && exit 0
+[[ "$UID" -lt 1000 ]] && exit 0
+
+EXP=$(chage -l "$USER" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
+
+if [[ "$EXP" == "never" ]] || [[ -z "$EXP" ]]; then
+    DIAS="Ilimitado"
+    COLOR="$V"
+else
+    EXP_SEC=$(date -d "$EXP" +%s 2>/dev/null)
+    HOY_SEC=$(date +%s)
+    DIAS=$(( ($EXP_SEC - $HOY_SEC) / 86400 ))
+
+    if [[ $DIAS -lt 0 ]]; then
+        COLOR="$R"; DIAS="EXPIRADO"
+    elif [[ $DIAS -lt 3 ]]; then
+        COLOR="$R"
+    elif [[ $DIAS -lt 7 ]]; then
+        COLOR="$A"
+    else
+        COLOR="$V"
+    fi
+fi
+
+echo -e "${M}╔══════════════════════════════════════════════════════════╗${N}"
+echo -e "${M}║${N} ${C}🚀 BIENVENIDO A JITTER VPN 🚀${N} ${M}║${N}"
+echo -e "${M}╠══════════════════════════════════════════════════════════╣${N}"
+echo -e "${M}║${N} ${B}Usuario:${N} ${C}$USER${N} ${M}║${N}"
+echo -e "${M}║${N} ${B}Expira:${N} ${C}${EXP:-Sin fecha}${N} ${M}║${N}"
+echo -e "${M}║${N} ${B}Días restantes:${N} ${COLOR}$DIAS${N} ${M}║${N}"
+echo -e "${M}╚══════════════════════════════════════════════════════════╝${N}"
+echo ""
+EOF
+  chmod +x /etc/jitter-banner.sh
+
+  # Agregar a /etc/profile si no existe
+  grep -q "jitter-banner.sh" /etc/profile || echo "/etc/jitter-banner.sh" >> /etc/profile
 }
 
-encabezado(){
-  clear
-  echo -e "${AZ}╔═════════════════════════════════════════╗${N}"
-  echo -e "${AZ}║${N}        ${B}$1${N}        ${AZ}║${N}"
-  echo -e "${AZ}╚═════════════════════════════════════════╝${N}"
-  echo ""
-}
-
-registrar(){
-  echo "[$(date +%d/%m/%Y %H:%M)] $1" >> /var/log/jitter-acciones.log
-}
-
-# -------- 8. CONFIGURAR BANNER (CORREGIDO) --------
-configurar_banner(){
-  encabezado "CONFIGURAR BANNER SSH / DROPBEAR"
-  echo -e "${C}Escribí el texto del banner (presioná ENTER dos veces para terminar):${N}"
-  echo -e "${GRIS}-------------------------------------------${N}"
-  
-  # Método corregido para entrada multinea
-  texto=""
-  while IFS= read -r linea; do
-    [ -z "$linea" ] && break
-    texto="${texto}${linea}\n"
-  done
-
-  # Si no se ingresó nada, usar banner por defecto
-  if [ -z "$texto" ]; then
-    texto="Bienvenido al servidor JitterVPN\n"
-  fi
-
-  # Guardar banner
-  echo -e "$texto" > "$BANNER_SSH"
-  echo -e "$texto" > "$BANNER_DROPBEAR"
-
-  # Activar en SSH
-  sed -i '/^Banner/d' /etc/ssh/sshd_config
-  echo "Banner $BANNER_SSH" >> /etc/ssh/sshd_config
-
-  # Activar en Dropbear
-  if [ -f /etc/default/dropbear ]; then
-    sed -i 's/^DROPBEAR_BANNER=.*/DROPBEAR_BANNER="'"$BANNER_DROPBEAR"'"/' /etc/default/dropbear
-    grep -q "DROPBEAR_BANNER" /etc/default/dropbear || echo 'DROPBEAR_BANNER="'"$BANNER_DROPBEAR"'"' >> /etc/default/dropbear
-  fi
-
-  systemctl restart ssh 2>/dev/null
-  [ -f /etc/default/dropbear ] && systemctl restart dropbear 2>/dev/null
-  
-  registrar "Banner actualizado"
-  echo -e "${V}✅ Banner aplicado correctamente${N}"
-  pausa
-}
-
-# -------- 9. CAMBIAR PUERTOS SSH (CORREGIDO) --------
-cambiar_puertos_ssh(){
-  encabezado "CAMBIAR PUERTOS SSH"
-  read -p "🔌 Puerto principal SSH: " p1
-  read -p "🔌 Puerto secundario SSH: " p2
-  
-  # Validar puertos
-  if ! [[ "$p1" =~ ^[0-9]+$ ]] || ! [[ "$p2" =~ ^[0-9]+$ ]]; then
-    echo -e "${R}❌ Los puertos deben ser números${N}"
-    pausa
-    return
-  fi
-
-  # Limpiar puertos existentes
-  sed -i '/^Port /d' /etc/ssh/sshd_config
-  
-  # Agregar nuevos puertos
-  echo "Port $p1" >> /etc/ssh/sshd_config
-  echo "Port $p2" >> /etc/ssh/sshd_config
-
-  # Firewall (verificar si ufw está instalado)
-  if command -v ufw &>/dev/null; then
-    ufw allow "$p1"/tcp 2>/dev/null
-    ufw allow "$p2"/tcp 2>/dev/null
-  fi
-  
-  systemctl restart ssh
-
-  registrar "Puertos SSH cambiados: $p1 y $p2"
-  echo -e "${V}✅ Puertos actualizados${N}"
-  pausa
-}
-
-# -------- 1. CREAR USUARIO (CORREGIDO) --------
+# -------- CREAR USUARIO SSH --------
 crear_usuario(){
-  encabezado "CREAR USUARIO SSH"
-  read -p "👤 Usuario: " user
-  
-  # Validar usuario
-  if [[ ! "$user" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo -e "${R}❌ Usuario inválido (solo letras, números, - y _)${N}"
-    pausa
-    return
-  fi
-  
-  read -s -p "🔑 Contraseña: " pass; echo ""
-  read -p "📅 Días de duración: " dias
-  read -p "🔢 Límite conexiones: " limite
+  clear
+  echo -e "${A}===== CREAR USUARIO SSH =====${N}"
+  read -p "Usuario: " user
+  read -p "Contraseña: " pass
+  read -p "Días de duración: " dias
+  read -p "Límite de conexiones: " limite
 
   if id "$user" &>/dev/null; then
-    echo -e "${R}❌ Ya existe${N}"; pausa; return
+    echo -e "${R}El usuario ya existe${N}"; pausa; return
   fi
 
   exp=$(date -d "+${dias} days" +%Y-%m-%d)
-  exp_ts=$(date -d "$exp" +%s)
-
   useradd -M -s /bin/false -e "$exp" "$user"
-  
-  # Seguridad: usar chpasswd desde stdin
   echo "$user:$pass" | chpasswd
 
-  # Guardar datos (escapar correctamente)
-  echo "$user $limite $exp_ts" >> "$DB_USUARIOS"
+  mkdir -p /etc/JitterVPN
+  echo "$user $limite" >> /etc/JitterVPN/usuarios.db
 
-  # Límites
-  echo "$user hard maxlogins $limite" >> /etc/security/limits.conf
+  # Instalar banner automático
+  instalar_banner_login
 
-  IP=$(curl -4 -s ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
-
-  echo -e "\n${V}✅ USUARIO CREADO${N}"
+  IP=$(curl -4 -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+  echo ""
+  echo -e "${V}✅ Usuario creado${N}"
   echo -e "${B}Usuario:${N} $user"
   echo -e "${B}Pass:${N} $pass"
   echo -e "${B}Expira:${N} $exp"
+  echo -e "${B}Límite:${N} $limite"
   echo -e "${B}IP:${N} $IP"
-
-  registrar "Usuario creado: $user"
+  echo -e "${A}⚠ El usuario verá su banner con días restantes al conectar${N}"
   pausa
 }
 
-# -------- 2. ELIMINAR USUARIO (CORREGIDO) --------
+# -------- ELIMINAR USUARIO --------
 eliminar_usuario(){
-  encabezado "ELIMINAR USUARIO"
-  read -p "👤 Usuario a borrar: " user
-
+  clear
+  echo -e "${A}===== ELIMINAR USUARIO =====${N}"
+  read -p "Usuario a eliminar: " user
   if id "$user" &>/dev/null; then
-    # Matar todos los procesos del usuario
     pkill -KILL -u "$user" 2>/dev/null
     userdel -r "$user" 2>/dev/null
-    
-    # Limpiar archivos de datos
-    sed -i "/^$user /d" "$DB_USUARIOS"
-    sed -i "/^$user hard maxlogins/d" /etc/security/limits.conf
-    
-    echo -e "${V}✅ Eliminado${N}"
-    registrar "Usuario eliminado: $user"
+    sed -i "/^$user /d" /etc/JitterVPN/usuarios.db 2>/dev/null
+    echo -e "${V}✅ Usuario $user eliminado${N}"
   else
-    echo -e "${R}❌ No existe${N}"
+    echo -e "${R}No existe${N}"
   fi
   pausa
 }
 
-# -------- 3. LISTAR USUARIOS (CORREGIDO) --------
+# -------- LISTAR USUARIOS --------
 listar_usuarios(){
-  encabezado "LISTA DE USUARIOS"
-  echo -e "${C}Usuario | Límite | Expira | Días restantes${N}"
-  echo -e "${GRIS}──────────────────────────────────────────${N}"
-
-  # Mostrar solo usuarios creados por el script (con shell /bin/false)
-  grep -E "/bin/false$" /etc/passwd | cut -d: -f1 | sort | while read -r u; do
-    datos=$(awk -v u="$u" '$1==u{print $2" "$3}' "$DB_USUARIOS")
-    if [ -n "$datos" ]; then
-      lim=$(echo "$datos" | awk '{print $1}')
-      exp_ts=$(echo "$datos" | awk '{print $2}')
-      exp_fmt=$(date -d "@$exp_ts" +%Y-%m-%d 2>/dev/null || echo "inválido")
-      act=$(date +%s)
-      dias=$(( (exp_ts - act)/86400 ))
-      
-      if [ "$dias" -lt 0 ]; then
-        estado="${R}EXPIRADO${N}"
-      else
-        estado="${V}$dias días${N}"
-      fi
-      echo -e "${B}$u${N} | $lim | $exp_fmt | $estado"
+  clear
+  echo -e "${A}===== USUARIOS SSH =====${N}"
+  printf "${B}%-15s %-15s %-10s${N}\n" "USUARIO" "EXPIRA" "DÍAS"
+  echo -e "${M}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  awk -F: '$3>=1000 && $1!="nobody"{print $1}' /etc/passwd | while read u; do
+    exp=$(chage -l "$u" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
+    if [[ "$exp" == "never" ]] || [[ -z "$exp" ]]; then
+        dias="∞"
+        color="$V"
     else
-      echo -e "${B}$u${N} | ${GRIS}sin límite${N} | ${GRIS}sin expiración${N} | ${GRIS}---${N}"
+        exp_sec=$(date -d "$exp" +%s 2>/dev/null)
+        hoy_sec=$(date +%s)
+        dias=$(( ($exp_sec - $hoy_sec) / 86400 ))
+        [[ $dias -lt 0 ]] && color="$R" || [[ $dias -lt 3 ]] && color="$R" || [[ $dias -lt 7 ]] && color="$A" || color="$V"
     fi
+    printf "${B}%-15s${N} %-15s ${color}%-10s${N}\n" "$u" "${exp:-Nunca}" "$dias"
   done
-  
-  # Mostrar total
-  total=$(grep -c "/bin/false$" /etc/passwd)
-  echo -e "\n${C}Total de usuarios SSH: $total${N}"
   pausa
 }
 
-# -------- 7. VER CONEXIONES (CORREGIDO) --------
-ver_conexiones(){
-  encabezado "CONEXIONES ACTIVAS"
-  
-  if ! command -v who &>/dev/null; then
-    echo -e "${R}❌ Comando 'who' no disponible${N}"
-    pausa
-    return
-  fi
-  
-  echo -e "${C}Usuario | Origen | Puerto | Conexión${N}"
-  echo -e "${GRIS}──────────────────────────────────────────${N}"
-  
-  who | while read -r line; do
-    user=$(echo "$line" | awk '{print $1}')
-    terminal=$(echo "$line" | awk '{print $2}')
-    origen=$(echo "$line" | awk '{print $5}' | sed 's/[()]//g')
-    echo -e "${B}$user${N} | ${origen:-local} | $terminal"
-  done
-  
-  total=$(who | wc -l)
-  echo -e "\n${C}Total de conexiones activas: $total${N}"
-  pausa
-}
-
-# -------- 4. INSTALAR DROPBEAR (CORREGIDO) --------
+# -------- INSTALAR DROPBEAR --------
 instalar_dropbear(){
-  encabezado "INSTALAR DROPBEAR"
-  read -p "🔌 Puerto 1: " p1
-  read -p "🔌 Puerto 2: " p2
-
-  # Verificar que los puertos sean válidos
-  if ! [[ "$p1" =~ ^[0-9]+$ ]] || ! [[ "$p2" =~ ^[0-9]+$ ]]; then
-    echo -e "${R}❌ Puertos inválidos${N}"
-    pausa
-    return
-  fi
-
-  apt update -y &>/dev/null
-  apt install -y dropbear &>/dev/null
-
-  # Configurar Dropbear
-  cat > /etc/default/dropbear <<EOF
-NO_START=0
-DROPBEAR_PORT=$p1
-DROPBEAR_EXTRA_ARGS="-p $p2 -b $BANNER_DROPBEAR"
-DROPBEAR_BANNER="$BANNER_DROPBEAR"
-EOF
-
-  # Asegurar que /bin/false está en shells
-  grep -q "^/bin/false$" /etc/shells || echo "/bin/false" >> /etc/shells
-
-  # Firewall
-  if command -v ufw &>/dev/null; then
-    ufw allow "$p1"/tcp 2>/dev/null
-    ufw allow "$p2"/tcp 2>/dev/null
-  fi
-  
+  clear
+  echo -e "${A}===== INSTALAR DROPBEAR =====${N}"
+  read -p "Puerto Dropbear (ej 444): " p1
+  read -p "Puerto Dropbear extra (ej 80): " p2
+  apt-get update -y
+  apt-get install -y dropbear
+  sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
+  sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=$p1/" /etc/default/dropbear
+  sed -i "s/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS=\"-p $p2\"/" /etc/default/dropbear
+  grep -q "/bin/false" /etc/shells || echo "/bin/false" >> /etc/shells
+  grep -q "/usr/sbin/nologin" /etc/shells || echo "/usr/sbin/nologin" >> /etc/shells
+  instalar_banner_login
   systemctl restart dropbear
-  systemctl enable dropbear &>/dev/null
-
-  echo -e "${V}✅ Dropbear listo en $p1 y $p2${N}"
-  registrar "Dropbear instalado"
+  systemctl enable dropbear
+  echo -e "${V}✅ Dropbear instalado en puertos $p1 y $p2${N}"
+  echo -e "${A}⚠ Banner de días restantes activado${N}"
   pausa
 }
 
-# -------- 5. INSTALAR PROXY WS (CORREGIDO) --------
+# -------- INSTALAR PROXY PYTHON (WEBSOCKET) --------
 instalar_proxy_python(){
-  encabezado "INSTALAR PROXY WEBSOCKET"
-  read -p "🔌 Puerto: " pport
-  
-  if ! [[ "$pport" =~ ^[0-9]+$ ]] || [ "$pport" -lt 1 ] || [ "$pport" -gt 65535 ]; then
-    echo -e "${R}❌ Puerto inválido (1-65535)${N}"
-    pausa
-    return
-  fi
-  
-  apt install -y python3 &>/dev/null
+  clear
+  echo -e "${A}===== INSTALAR PROXY PYTHON =====${N}"
+  read -p "Puerto del proxy (ej 8080): " pport
+  apt-get install -y python3
 
   cat > /usr/local/bin/jitter-proxy.py <<'PYEOF'
 #!/usr/bin/env python3
-import socket
-import threading
-import sys
-import select
+import socket, threading, sys, select
+LISTENING_ADDR='0.0.0.0'
+try: LISTENING_PORT=int(sys.argv[1])
+except: LISTENING_PORT=8080
+PASS=''
+BUFLEN=8196*8
+TIMEOUT=60
+DEFAULT_HOST='127.0.0.1:22'
+RESPONSE='HTTP/1.1 101 <b>JitterVPN</b>\r\n\r\n'
 
-LISTENING_ADDR = '0.0.0.0'
-LISTENING_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-BUFLEN = 8192 * 8
-TIMEOUT = 60
-DEFAULT_HOST = '127.0.0.1:22'
-RESPONSE = b'HTTP/1.1 101 Switching Protocols\r\n\r\n'
-
-class ProxyServer(threading.Thread):
-    def __init__(self, host, port):
-        super().__init__()
-        self.host = host
-        self.port = port
-        self.running = True
-        self.daemon = True
-        
+class Server(threading.Thread):
+    def __init__(self,host,port):
+        threading.Thread.__init__(self)
+        self.running=False
+        self.host=host; self.port=port
+        self.threads=[]
+        self.threadsLock=threading.Lock()
+        self.logLock=threading.Lock()
     def run(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind((self.host, self.port))
-        server_socket.listen(100)
-        
+        self.soc=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.soc.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        self.soc.settimeout(2)
+        self.soc.bind((self.host,self.port))
+        self.soc.listen(0)
+        self.running=True
         while self.running:
             try:
-                client_socket, address = server_socket.accept()
-                client_thread = threading.Thread(target=self.handle_client, args=(client_socket,))
-                client_thread.daemon = True
-                client_thread.start()
-            except:
-                pass
-                
-    def handle_client(self, client_socket):
-        try:
-            data = client_socket.recv(BUFLEN).decode('utf-8', errors='ignore')
-            if not data:
-                return
-                
-            # Extraer host objetivo
-            target_host = DEFAULT_HOST
-            for line in data.split('\r\n'):
-                if line.lower().startswith('x-real-host:'):
-                    target_host = line.split(':', 1)[1].strip()
-                    break
-                    
-            host, port = target_host.split(':') if ':' in target_host else ('127.0.0.1', '22')
-            port = int(port)
-            
-            # Conectar al destino
-            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            remote_socket.settimeout(TIMEOUT)
-            remote_socket.connect((host, port))
-            
-            # Enviar respuesta de upgrade
-            client_socket.send(RESPONSE)
-            
-            # Iniciar transferencia bidireccional
-            threading.Thread(target=self.forward_data, args=(client_socket, remote_socket)).start()
-            threading.Thread(target=self.forward_data, args=(remote_socket, client_socket)).start()
-            
-        except Exception as e:
-            pass
-            
-    def forward_data(self, source, destination):
-        try:
-            while self.running:
-                data = source.recv(BUFLEN)
-                if not data:
-                    break
-                destination.send(data)
-        except:
-            pass
-        finally:
-            try:
-                source.close()
-                destination.close()
-            except:
-                pass
+                c,addrPara que al usuario le salga un banner con días restantes cuando se conecta por SSH/VPN, tenés que usar el `Banner` de SSH y un script PAM. Lo armé para tu bin:
 
-if __name__ == '__main__':
-    server = ProxyServer(LISTENING_ADDR, LISTENING_PORT)
-    server.start()
-    print(f"Proxy WebSocket iniciado en {LISTENING_ADDR}:{LISTENING_PORT}")
-    
-    try:
-        while True:
-            input()
-    except KeyboardInterrupt:
-        server.running = False
-        sys.exit(0)
-PYEOF
+**1. Agregá estas 2 funciones nuevas a tu script:**
 
-  chmod +x /usr/local/bin/jitter-proxy.py
+Pegá esto arriba del `# -------- MENÚ PRINCIPAL --------`
 
-  cat > /etc/systemd/system/jitter-proxy.service <<EOF
-[Unit]
-Description=Jitter WebSocket Proxy
-After=network.target
-Documentation=https://github.com/JitterVPN
+```bash
+# -------- BANNER CONEXIÓN CON DÍAS RESTANTES --------
+configurar_banner_conexion(){
+  # Crear script que se ejecuta en cada login SSH
+  cat > /etc/ssh/jitter-banner.sh <<'BANEOF'
+#!/bin/bash
+user=$(whoami)
+exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
 
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/jitter-proxy.py $pport
-Restart=always
-RestartSec=10
-User=root
+if [[ "$exp" == "never" ]] || [[ -z "$exp" ]]; then
+    dias="∞"
+    echo -e "\033[1;35m╔══════════════════════════════════════════════════════════╗\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;37m 🚀 BIENVENIDO A JITTER VPN 🚀 \033[0m \033[1;35m║\033[0m"
+    echo -e "\033[1;35m╠══════════════════════════════════════════════════════════╣\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;33m Usuario:\033[0m \033[1;36m$user\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;33m Expira:\033[0m \033[1;32mNunca\033[0m"
+    echo -e "\033[1;35m╚══════════════════════════════════════════════════════════╝\033[0m"
+else
+    exp_seg=$(date -d "$exp" +%s 2>/dev/null)
+    hoy_seg=$(date +%s)
+    dias=$(( ($exp_seg - $hoy_seg) / 86400 ))
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable --now jitter-proxy
-  
-  if command -v ufw &>/dev/null; then
-    ufw allow "$pport"/tcp 2>/dev/null
-  fi
-
-  echo -e "${V}✅ Proxy WebSocket activo en puerto $pport${N}"
-  registrar "Proxy WebSocket instalado en puerto $pport"
-  pausa
-}
-
-# -------- 6. ESTADO SERVICIOS (CORREGIDO) --------
-estado(){
-  encabezado "ESTADO DE SERVICIOS"
-  
-  # Servicios a verificar
-  services=("ssh" "dropbear" "jitter-proxy")
-  
-  for s in "${services[@]}"; do
-    if systemctl is-active --quiet "$s" 2>/dev/null; then
-      echo -e "🔹 $s: ${V}🟢 ACTIVO${N}"
-    elif [ "$s" = "jitter-proxy" ] && [ -f /etc/systemd/system/jitter-proxy.service ]; then
-      echo -e "🔹 $s: ${R}🔴 INACTIVO (usar 'systemctl start jitter-proxy')${N}"
-    elif [ "$s" = "dropbear" ] && [ ! -f /etc/default/dropbear ]; then
-      echo -e "🔹 $s: ${GRIS}⚪ NO INSTALADO${N}"
+    if [ $dias -lt 0 ]; then
+        echo -e "\033[1;31m╔══════════════════════════════════════════════════════════╗\033[0m"
+        echo -e "\033[1;31m║\033[0m \033[1;37m ⚠ CUENTA VENCIDA ⚠ \033[0m \033[1;31m║\033[0m"
+        echo -e "\033[1;31m║\033[0m \033[1;37m Contacta a @JitterVPN para renovar \033[0m \033[1;31m║\033[0m"
+        echo -e "\033[1;31m╚══════════════════════════════════════════════════════════╝\033[0m"
+        sleep 2
+        exit 1
+    elif [ $dias -le 3 ]; then
+        color="\033[1;31m" # Rojo si quedan 3 días o menos
+    elif [ $dias -le 7 ]; then
+        color="\033[1;33m" # Amarillo si quedan 7 días o menos
     else
-      echo -e "🔹 $s: ${R}🔴 INACTIVO${N}"
+        color="\033[1;32m" # Verde
     fi
-  done
-  
-  echo -e "\n${C}Puertos SSH activos:${N}"
-  grep "^Port" /etc/ssh/sshd_config 2>/dev/null | awk '{print "   📡 Puerto "$2}' || echo "   No configurado"
-  
-  if [ -f /etc/default/dropbear ]; then
-    echo -e "\n${C}Puertos Dropbear activos:${N}"
-    grep -E "DROPBEAR_PORT|DROPBEAR_EXTRA_ARGS" /etc/default/dropbear 2>/dev/null | grep -oP '[0-9]+' | while read -r port; do
-      echo "   📡 Puerto $port"
-    done
-  fi
-  
+
+    echo -e "\033[1;35m╔══════════════════════════════════════════════════════════╗\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;37m 🚀 JITTER VPN - BIENVENIDO 🚀 \033[0m \033[1;35m║\033[0m"
+    echo -e "\033[1;35m╠══════════════════════════════════════════════════════════╣\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;33m Usuario:\033[0m \033[1;36m$user\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;33m Expira:\033[0m \033[1;36m$exp\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;33m Días restantes:\033[0m ${color}$dias días\033[0m"
+    echo -e "\033[1;35m║\033[0m \033[1;33m Soporte:\033[0m \033[1;36m@JitterVPN\033[0m"
+    echo -e "\033[1;35m╚══════════════════════════════════════════════════════════╝\033[0m"
+fi
+echo ""
+BANEOF
+
+  chmod +x /etc/ssh/jitter-banner.sh
+
+  # Activar banner en SSH
+  grep -q "/etc/ssh/jitter-banner.sh" /etc/ssh/sshd_config || echo "Banner /etc/ssh/jitter-banner.sh" >> /etc/ssh/sshd_config
+
+  # Usar PAM para mostrar el banner después del login
+  grep -q "pam_exec.so" /etc/pam.d/sshd || echo "session optional pam_exec.so stdout /etc/ssh/jitter-banner.sh" >> /etc/pam.d/sshd
+
+  systemctl restart sshd
+  echo -e "${V}✓ Banner de conexión activado${N}"
+  echo -e "${A}Ahora cuando un usuario se conecte por SSH verá días restantes${N}"
   pausa
 }
 
-# -------- MENÚ PRINCIPAL --------
-while true; do
-  clear
-  
-  # Obtener IP de manera segura
-  IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-  [ -z "$IP" ] && IP="No disponible"
-
-  echo -e "${AZ}╔═════════════════════════════════════════════════╗${N}"
-  echo -e "${AZ}║${N}           🚀  JITTER SSH MANAGER  🚀           ${AZ}║${N}"
-  echo -e "${AZ}╠═════════════════════════════════════════════════╣${N}"
-  echo -e "${AZ}║${N}  🌐 IP SERVIDOR: ${B}$IP${N}              ${AZ}║${N}"
-  echo -e "${AZ}╠═════════════════════════════════════════════════╣${N}"
-  echo -e "${AZ}║${N}  ${V}👤 USUARIOS${N}                                          ${AZ}║${N}"
-  echo -e "${AZ}║${N}   ${V}1)${N} Crear usuario        ${V}2)${N} Eliminar usuario       ${AZ}║${N}"
-  echo -e "${AZ}║${N}   ${V}3)${N} Listar usuarios       ${V}7)${N} Ver conexiones activas  ${AZ}║${N}"
-  echo -e "${AZ}╠═════════════════════════════════════════════════╣${N}"
-  echo -e "${AZ}║${N}  ${C}⚙️ SERVICIOS${N}                                          ${AZ}║${N}"
-  echo -e "${AZ}║${N}   ${C}4)${N} Instalar Dropbear     ${C}5)${N} Instalar Proxy WS       ${AZ}║${N}"
-  echo -e "${AZ}║${N}   ${C}6)${N} Estado de servicios                           ${AZ}║${N}"
-  echo -e "${AZ}╠═════════════════════════════════════════════════╣${N}"
-  echo -e "${AZ}║${N}  ${M}🎨 PERSONALIZACIÓN${N}                                    ${AZ}║${N}"
-  echo -e "${AZ}║${N}   ${M}8)${N} Configurar Banner SSH/Dropbear                 ${AZ}║${N}"
-  echo -e "${AZ}║${N}   ${M}9)${N} Cambiar puertos SSH                            ${AZ}║${N}"
-  echo -e "${AZ}╠═════════════════════════════════════════════════╣${N}"
-  echo -e "${AZ}║${N}   ${R}0)${N} 🚪 SALIR DEL SISTEMA                           ${AZ}║${N}"
-  echo -e "${AZ}╚═════════════════════════════════════════════════╝${N}"
-  echo ""
-  read -p "👉 Elegí una opción: " op
-
-  case $op in
-    1) crear_usuario ;;
-    2) eliminar_usuario ;;
-    3) listar_usuarios ;;
-    4) instalar_dropbear ;;
-    5) instalar_proxy_python ;;
-    6) estado ;;
-    7) ver_conexiones ;;
-    8) configurar_banner ;;
-    9) cambiar_puertos_ssh ;;
-    0) clear; echo -e "${V}👋 Hasta luego!${N}"; exit 0 ;;
-    *) echo -e "${R}❌ Opción inválida${N}"; sleep 1 ;;
-  esac
-done
+# -------- DESACTIVAR BANNER CONEXIÓN --------
+desactivar_banner_conexion(){
+  sed -i '/jitter-banner.sh/d' /etc/ssh/sshd_config
+  sed -i '/jitter-banner.sh/d' /etc/pam.d/sshd
+  rm -f /etc/ssh/jitter-banner.sh
+  systemctl restart sshd
+  echo -e "${V}✓ Banner de conexión desactivado${N}"
+  pausa
+}
