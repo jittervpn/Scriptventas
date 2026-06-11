@@ -1,275 +1,224 @@
 #!/bin/bash
+# ================================================================
+# JITTER PANEL SSH v3.1 - INSTALADOR COMPLETO
+# Menú: Usuarios, Puertos, IP, Banner, BadVPN, SSL, etc
+# ================================================================
 
-# Colores
-VERDE='\033[0;32m'
-ROJO='\033[0;31m'
-AMARILLO='\033[1;33m'
-AZUL='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+[[ $(id -u)!= 0 ]] && { echo "Ejecutar como root"; exit 1; }
 
-# Verificar ROOT
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${ROJO}❌ DEBES EJECUTAR COMO ROOT${NC}"
-    exit 1
-fi
+# COLORES
+P='\033[0;35m'; V='\033[1;35m'; R='\033[0;91m'; G='\033[0;92m'
+Y='\033[1;93m'; B='\033[0;94m'; C='\033[0;96m'; W='\033[1;97m'
+N='\033[0m'
 
-echo -e "${AZUL}=============================================${NC}"
-echo -e "${AZUL}    INSTALACIÓN COMPLETA - SIN ERRORES    ${NC}"
-echo -e "${AZUL}=============================================${NC}"
+clear
+echo -e "${V}"
+cat << 'LOGO'
+      ██╗██╗████████╗████████╗███████╗██████╗
+      ██║██║╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗
+      ██║██║ ██║ ██║ █████╗ ██████╔╝
+ ██ ██║██║ ██║ ██║ ██╔══╝ ██╔══██╗
+ ╚█████╔╝██║ ██║ ██║ ███████╗██║ ██║
+  ╚════╝ ╚═╝ ╚═╝ ╚═╝ ╚══════╝╚═╝ ╚═╝
+LOGO
+echo -e "${P} █ JITTER PANEL SSH v3.1 - INSTALADOR █${N}"
+echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+echo ""
 
-# Actualizar e instalar paquetes
-apt update -y && apt upgrade -y
-apt install -y curl wget git nano vim zip unzip tar net-tools \
-    iptables ufw openssh-server openssl sudo screen htop \
-    build-essential libssl-dev zlib1g-dev lsof bc
+echo -e " ${B}▸${N} ${W}Instalando dependencias...${N}"
+apt update -y >/dev/null 2>&1
+apt install -y curl wget net-tools ufw openssh-server dropbear stunnel4 squid >/dev/null 2>&1
 
-# Configurar servicios
-systemctl enable --now ssh
-systemctl enable --now ufw
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw --force enable
+echo -e " ${B}▸${N} ${W}Configurando estructura...${N}"
+mkdir -p /etc/jitterpanel /var/log/jitterpanel
 
-# Carpetas y archivos
-mkdir -p /etc/mi_panel/usuarios
-mkdir -p /etc/mi_panel/config
-mkdir -p /var/log/mi_panel
-
-touch /etc/mi_panel/config/puertos.conf
-touch /etc/mi_panel/config/ips_permitidas.conf
-touch /etc/mi_panel/config/banner.txt
-touch /etc/mi_panel/usuarios/lista_usuarios.db
-touch /var/log/mi_panel/acciones.log
-
-chmod -R 700 /etc/mi_panel
-chown -R root:root /etc/mi_panel
-
-# Banner por defecto
-cat > /etc/mi_panel/config/banner.txt << EOF
-=============================================
-           BIENVENIDO AL SISTEMA
-   Administración y Gestión de Servicios
-=============================================
-Acceso restringido solo a personal autorizado
-Todas las acciones son registradas
-=============================================
-EOF
-
-# CREAR MENÚ CORREGIDO 100%
-cat > /usr/bin/menu_admin << 'EOF'
+# ── CREAR EL MENÚ ADMIN ──────────────────────────────────────
+cat > /usr/bin/menu << 'MENU'
 #!/bin/bash
-# Rutas
-DIR_CONF="/etc/mi_panel/config"
-DIR_USU="/etc/mi_panel/usuarios"
-ARCH_PUERTOS="$DIR_CONF/puertos.conf"
-ARCH_IPS="$DIR_CONF/ips_permitidas.conf"
-ARCH_BANNER="$DIR_CONF/banner.txt"
-ARCH_USUARIOS="$DIR_USU/lista_usuarios.db"
-LOGS="/var/log/mi_panel/acciones.log"
+# COLORES
+P='\033[0;35m'; V='\033[1;35m'; R='\033[0;91m'; G='\033[0;92m'
+Y='\033[1;93m'; B='\033[0;94m'; C='\033[0;96m'; W='\033[1;97m'; N='\033[0m'
 
-# Colores
-VERDE='\033[0;32m'
-ROJO='\033[0;31m'
-AMARILLO='\033[1;33m'
-AZUL='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-registrar() {
-    echo "[$(date +%Y-%m-%d\ %H:%M:%S)] $1" >> "$LOGS"
-}
+[[ $(id -u)!= 0 ]] && { echo -e "${R}Ejecutar como root: sudo menu${N}"; exit 1; }
 
 pausa() {
-    echo -e "\n${CYAN}Presiona Enter para continuar...${NC}"
-    read -r
+    echo ""
+    read -p " Presiona ENTER para continuar..."
 }
 
-# ---------------- USUARIOS ----------------
-menu_usuarios() {
-    while true; do
-        clear
-        echo -e "${AZUL}=== GESTIÓN DE USUARIOS ===${NC}"
-        echo "1. Agregar usuario"
-        echo "2. Eliminar usuario"
-        echo "3. Listar usuarios"
-        echo "4. Cambiar contraseña"
-        echo "5. Volver"
-        read -p "Opción: " op
-        case $op in
-            1)
-                read -p "Usuario: " u
-                if grep -q "^$u:" "$ARCH_USUARIOS"; then echo -e "${ROJO}Ya existe${NC}"; pausa; continue; fi
-                read -s -p "Contraseña: " p; echo
-                read -p "Vencimiento (días, 0=siempre): " v
-                echo "$u:$p:$(date +%s):$v" >> "$ARCH_USUARIOS"
-                registrar "Agregado: $u"
-                echo -e "${VERDE}✅ OK${NC}"; pausa
-                ;;
-            2)
-                read -p "Usuario a borrar: " u
-                if grep -q "^$u:" "$ARCH_USUARIOS"; then sed -i "/^$u:/d" "$ARCH_USUARIOS"; registrar "Borrado: $u"; echo -e "${VERDE}✅ OK${NC}"; else echo -e "${ROJO}No existe${NC}"; fi
-                pausa
-                ;;
-            3)
-                echo -e "${CYAN}--- Lista ---${NC}"
-                [ -s "$ARCH_USUARIOS" ] && awk -F: '{print "Usuario: "$1" | Creado: "$3" | Vence: "$4" días"}' "$ARCH_USUARIOS" || echo "Vacío"
-                pausa
-                ;;
-            4)
-                read -p "Usuario: " u
-                if grep -q "^$u:" "$ARCH_USUARIOS"; then
-                    read -s -p "Nueva contraseña: " p; echo
-                    sed -i "s/^$u:[^:]*/$u:$p/" "$ARCH_USUARIOS"
-                    registrar "Contraseña cambiada: $u"; echo -e "${VERDE}✅ OK${NC}"
-                else echo -e "${ROJO}No existe${NC}"; fi
-                pausa
-                ;;
-            5) break ;;
-            *) echo -e "${ROJO}Inválido${NC}"; pausa ;;
-        esac
-    done
-}
-
-# ---------------- PUERTOS ----------------
-menu_puertos() {
-    while true; do
-        clear
-        echo -e "${AZUL}=== GESTIÓN DE PUERTOS ===${NC}"
-        echo "1. Abrir"
-        echo "2. Cerrar"
-        echo "3. Ver abiertos"
-        echo "4. Volver"
-        read -p "Opción: " op
-        case $op in
-            1)
-                read -p "Puerto: " pto
-                read -p "Protocolo (tcp/udp/ambos): " pro
-                if [ "$pro" = "ambos" ]; then
-                    ufw allow "$pto"/tcp; ufw allow "$pto"/udp
-                    echo "$pto/tcp" >> "$ARCH_PUERTOS"; echo "$pto/udp" >> "$ARCH_PUERTOS"
-                else
-                    ufw allow "$pto/$pro"; echo "$pto/$pro" >> "$ARCH_PUERTOS"
-                fi
-                registrar "Abierto: $pto/$pro"; echo -e "${VERDE}✅ OK${NC}"; pausa
-                ;;
-            2)
-                read -p "Puerto: " pto
-                read -p "Protocolo (tcp/udp/ambos): " pro
-                if [ "$pro" = "ambos" ]; then
-                    ufw deny "$pto"/tcp; ufw deny "$pto"/udp
-                    sed -i "/^$pto\/tcp/d" "$ARCH_PUERTOS"; sed -i "/^$pto\/udp/d" "$ARCH_PUERTOS"
-                else
-                    ufw deny "$pto/$pro"; sed -i "/^$pto\/$pro/d" "$ARCH_PUERTOS"
-                fi
-                registrar "Cerrado: $pto/$pro"; echo -e "${VERDE}✅ OK${NC}"; pausa
-                ;;
-            3)
-                echo -e "${CYAN}--- Registrados ---${NC}"; [ -s "$ARCH_PUERTOS" ] && cat "$ARCH_PUERTOS" || echo "Vacío"
-                echo -e "\n--- Activos ---"; netstat -tulpn | grep LISTEN
-                pausa
-                ;;
-            4) break ;;
-            *) echo -e "${ROJO}Inválido${NC}"; pausa ;;
-        esac
-    done
-}
-
-# ---------------- IPS ----------------
-menu_ips() {
-    while true; do
-        clear
-        echo -e "${AZUL}=== GESTIÓN DE IPs ===${NC}"
-        echo "1. Permitir"
-        echo "2. Bloquear"
-        echo "3. Ver reglas"
-        echo "4. Volver"
-        read -p "Opción: " op
-        case $op in
-            1)
-                read -p "IP: " ip; ufw allow from "$ip"; echo "PERMITIR:$ip" >> "$ARCH_IPS"
-                registrar "Permitida: $ip"; echo -e "${VERDE}✅ OK${NC}"; pausa
-                ;;
-            2)
-                read -p "IP: " ip; ufw deny from "$ip"; echo "BLOQUEAR:$ip" >> "$ARCH_IPS"
-                registrar "Bloqueada: $ip"; echo -e "${VERDE}✅ OK${NC}"; pausa
-                ;;
-            3)
-                echo -e "${CYAN}--- Reglas ---${NC}"; [ -s "$ARCH_IPS" ] && cat "$ARCH_IPS" || echo "Vacío"
-                echo -e "\n--- Firewall ---"; ufw status numbered
-                pausa
-                ;;
-            4) break ;;
-            *) echo -e "${ROJO}Inválido${NC}"; pausa ;;
-        esac
-    done
-}
-
-# ---------------- BANNER ----------------
-menu_banner() {
-    while true; do
-        clear
-        echo -e "${AZUL}=== BANNER ===${NC}"
-        echo "1. Ver"
-        echo "2. Editar"
-        echo "3. Restaurar original"
-        echo "4. Volver"
-        read -p "Opción: " op
-        case $op in
-            1) echo -e "${CYAN}--- BANNER ---${NC}"; cat "$ARCH_BANNER"; pausa ;;
-            2) nano "$ARCH_BANNER"; registrar "Banner editado"; echo -e "${VERDE}✅ OK${NC}"; pausa ;;
-            3)
-                cat > "$ARCH_BANNER" << EOF
-=============================================
-           BIENVENIDO AL SISTEMA
-   Administración y Gestión de Servicios
-=============================================
-Acceso restringido solo a personal autorizado
-Todas las acciones son registradas
-=============================================
-EOF
-                registrar "Banner restaurado"; echo -e "${VERDE}✅ OK${NC}"; pausa
-                ;;
-            4) break ;;
-            *) echo -e "${ROJO}Inválido${NC}"; pausa ;;
-        esac
-    done
-}
-
-# ---------------- MENÚ PRINCIPAL ----------------
-while true; do
+banner() {
     clear
-    echo -e "${AZUL}=============================================${NC}"
-    echo -e "${AZUL}      MENÚ DE ADMINISTRACIÓN       ${NC}"
-    echo -e "${AZUL}=============================================${NC}"
-    echo "1. Usuarios"
-    echo "2. Puertos"
-    echo "3. IPs"
-    echo "4. Banner"
-    echo "5. Ver registro"
-    echo "6. Salir"
-    echo -e "${AZUL}=============================================${NC}"
-    read -p "Elige: " op
-    case $op in
-        1) menu_usuarios ;;
-        2) menu_puertos ;;
-        3) menu_ips ;;
-        4) menu_banner ;;
-        5) echo -e "${CYAN}--- REGISTRO ---${NC}"; [ -s "$LOGS" ] && cat "$LOGS" || echo "Vacío"; pausa ;;
-        6) echo -e "${VERDE}Saliendo...${NC}"; exit 0 ;;
-        *) echo -e "${ROJO}Inválido${NC}"; pausa ;;
+    echo -e "${V}"
+    echo ' ██╗██╗████████╗████████╗███████╗██████╗'
+    echo ' ██║██║╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗'
+    echo ' ██║██║ ██║ ██║ █████╗ ██████╔╝'
+    echo ' ██ ██║██║ ██║ ██║ ██╔══╝ ██╔══██╗'
+    echo ' ╚█████╔╝██║ ██║ ██║ ███████╗██║ ██║'
+    echo ' ╚════╝ ╚═╝ ╚═╝ ╚═╝ ╚══════╝╚═╝ ╚═╝'
+    echo -e "${P} █ JITTER PANEL SSH v3.1 █${N}"
+    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+    echo -e " ${W}IP: ${C}$(curl -s ifconfig.me)${N} ${W}OS: ${C}$(lsb_release -ds 2>/dev/null)${N}"
+    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+}
+
+crear_usuario() {
+    banner
+    echo -e "${P}[1] CREAR USUARIO SSH${N}"
+    echo ""
+    read -p " ${B}▸${N} ${W}Usuario: ${N}" user
+    [[ -z "$user" ]] && { echo -e " ${R}Usuario vacío${N}"; pausa; return; }
+    read -p " ${B}▸${N} ${W}Contraseña: ${N}" pass
+    read -p " ${B}▸${N} ${W}Días para expirar: ${N}" dias
+    read -p " ${B}▸${N} ${W}Límite de conexiones: ${N}" limit
+
+    dias=${dias:-30}
+    limit=${limit:-1}
+    exp=$(date -d "+$dias days" +"%Y-%m-%d")
+
+    useradd -M -s /bin/false -e "$exp" "$user" 2>/dev/null
+    echo "$user:$pass" | chpasswd
+    echo "$user $limit" >> /etc/jitterpanel/limites
+
+    echo ""
+    echo -e " ${G}✓ Usuario creado${N}"
+    echo -e " ${W}Usuario:${N} $user"
+    echo -e " ${W}Clave:${N} $pass"
+    echo -e " ${W}Expira:${N} $exp"
+    echo -e " ${W}Límite:${N} $limit"
+    pausa
+}
+
+eliminar_usuario() {
+    banner
+    echo -e "${P}[2] ELIMINAR USUARIO${N}"
+    echo ""
+    echo -e "${W}Usuarios activos:${N}"
+    cut -d: -f1 /etc/passwd | grep -vE '^(root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody|systemd|messagebus|syslog|_apt|lxd|uuidd|dnsmasq|landscape|pollinate|sshd)' | nl
+    echo ""
+    read -p " ${B}▸${N} ${W}Usuario a eliminar: ${N}" user
+    [[ -z "$user" ]] && { pausa; return; }
+
+    pkill -u "$user" 2>/dev/null
+    userdel "$user" 2>/dev/null
+    sed -i "/^$user /d" /etc/jitterpanel/limites
+
+    echo -e " ${G}✓ Usuario $user eliminado${N}"
+    pausa
+}
+
+listar_usuarios() {
+    banner
+    echo -e "${P}[3] USUARIOS CONECTADOS${N}"
+    echo ""
+    printf "${W}%-15s %-10s %-10s %-15s${N}\n" "USUARIO" "LIMITE" "CONECTADOS" "EXPIRA"
+    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+
+    while IFS= read -r line; do
+        user=$(echo "$line" | cut -d: -f1)
+        exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2)
+        limit=$(grep "^$user " /etc/jitterpanel/limites 2>/dev/null | awk '{print $2}')
+        limit=${limit:-0}
+        online=$(ps -u "$user" | grep -c sshd)
+        printf "%-15s %-10s %-10s %-15s\n" "$user" "$limit" "$online" "$exp"
+    done < <(cut -d: -f1 /etc/passwd | grep -vE '^(root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody|systemd|messagebus|syslog|_apt|lxd|uuidd|dnsmasq|landscape|pollinate|sshd)')
+    pausa
+}
+
+cambiar_puerto() {
+    banner
+    echo -e "${P}[4] CAMBIAR PUERTOS${N}"
+    echo ""
+    echo -e " ${W}1.${N} SSH: $(grep Port /etc/ssh/sshd_config | awk '{print $2}' | head -1)"
+    echo -e " ${W}2.${N} Dropbear: $(grep DROPBEAR_PORT /etc/default/dropbear | cut -d= -f2)"
+    echo -e " ${W}3.${N} SSL: $(grep accept /etc/stunnel/stunnel.conf 2>/dev/null | awk '{print $3}' | head -1)"
+    echo ""
+    read -p " ${B}▸${N} ${W}Opción [1-3]: ${N}" opt
+    read -p " ${B}▸${N} ${W}Nuevo puerto: ${N}" puerto
+
+    case $opt in
+        1) sed -i "s/Port.*/Port $puerto/" /etc/ssh/sshd_config
+           ufw allow $puerto/tcp >/dev/null 2>&1
+           systemctl restart sshd ;;
+        2) sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=$puerto/" /etc/default/dropbear
+           ufw allow $puerto/tcp >/dev/null 2>&1
+           systemctl restart dropbear ;;
+        3) sed -i "s/accept =.*/accept = $puerto/" /etc/stunnel/stunnel.conf
+           ufw allow $puerto/tcp >/dev/null 2>&1
+           systemctl restart stunnel4 ;;
+    esac
+    echo -e " ${G}✓ Puerto cambiado a $puerto${N}"
+    pausa
+}
+
+cambiar_banner() {
+    banner
+    echo -e "${P}[5] CAMBIAR BANNER SSH${N}"
+    echo ""
+    echo -e " ${W}Pega tu banner y termina con CTRL+D:${N}"
+    cat > /etc/jitterpanel/banner
+    echo "Banner /etc/jitterpanel/banner" >> /etc/ssh/sshd_config
+    systemctl restart sshd
+    echo -e " ${G}✓ Banner actualizado${N}"
+    pausa
+}
+
+ver_ip() {
+    banner
+    echo -e "${P}[6] INFORMACIÓN DEL VPS${N}"
+    echo ""
+    echo -e " ${W}IP Pública:${N} ${C}$(curl -s ifconfig.me)${N}"
+    echo -e " ${W}IP Local:${N} ${C}$(hostname -I | awk '{print $1}')${N}"
+    echo -e " ${W}Hostname:${N} ${C}$(hostname)${N}"
+    echo -e " ${W}Uptime:${N} ${C}$(uptime -p)${N}"
+    echo -e " ${W}OS:${N} ${C}$(lsb_release -ds 2>/dev/null)${N}"
+    pausa
+}
+
+# MENU PRINCIPAL
+while true; do
+    banner
+    echo -e "${P}[1]${N} ${W}Crear usuario SSH${N}"
+    echo -e "${P}[2]${N} ${W}Eliminar usuario${N}"
+    echo -e "${P}[3]${N} ${W}Listar usuarios conectados${N}"
+    echo -e "${P}[4]${N} ${W}Cambiar puertos${N}"
+    echo -e "${P}[5]${N} ${W}Cambiar Banner SSH${N}"
+    echo -e "${P}[6]${N} ${W}Ver IP/Info del VPS${N}"
+    echo -e "${P}[0]${N} ${R}Salir${N}"
+    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+    read -p " ${B}▸${N} ${W}Opción: ${N}" opcao
+
+    case $opcao in
+        1) crear_usuario ;;
+        2) eliminar_usuario ;;
+        3) listar_usuarios ;;
+        4) cambiar_puerto ;;
+        5) cambiar_banner ;;
+        6) ver_ip ;;
+        0) exit 0 ;;
+        *) echo -e " ${R}Opción inválida${N}"; sleep 1 ;;
     esac
 done
-EOF
+MENU
 
-# ✅ PERMISOS ASEGURADOS (aquí estaba el error antes)
-chmod 755 /usr/bin/menu_admin
-chown root:root /usr/bin/menu_admin
-chmod +x install.sh
+chmod +x /usr/bin/menu
+ln -sf /usr/bin/menu_admin 2>/dev/null
 
-echo -e "${VERDE}=============================================${NC}"
-echo -e "${VERDE}✅ INSTALACIÓN LISTA Y CORREGIDA ✅${NC}"
-echo -e "${VERDE}=============================================${NC}"
-echo -e "Escribe: ${AMARILLO}menu_admin${NC}"
-echo -e "${VERDE}=============================================${NC}"
+# CONFIGURAR SSH
+sed -i 's/#Port 22/Port 22/' /etc/ssh/sshd_config
+sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+systemctl restart sshd
+
+# FIREWALL
+ufw allow 22/tcp >/dev/null 2>&1
+ufw allow 80/tcp >/dev/null 2>&1
+ufw allow 443/tcp >/dev/null 2>&1
+ufw --force enable >/dev/null 2>&1
+
+echo ""
+echo -e "${V}╔══════════════════════════════════════════════════════════════╗${N}"
+echo -e "${V}║${N} ${W}✓ INSTALACIÓN COMPLETADA${N} ${V}║${N}"
+echo -e "${V}╠══════════════════════════════════════════════════════════════╣${N}"
+echo -e "${V}║${N} ${W}Usa el comando:${N} ${C}sudo menu${N} ${V}║${N}"
+echo -e "${V}║${N} ${W}o también:${N} ${C}menu${N} ${V}║${N}"
+echo -e "${V}╚══════════════════════════════════════════════════════════════╝${N}"
+echo ""
