@@ -5,6 +5,7 @@ VERDE='\033[0;32m'
 ROJO='\033[0;31m'
 AMARILLO='\033[1;33m'
 AZUL='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Verificar si es root
@@ -49,6 +50,7 @@ touch /etc/mi_panel/config/puertos.conf
 touch /etc/mi_panel/config/ips_permitidas.conf
 touch /etc/mi_panel/config/banner.txt
 touch /etc/mi_panel/usuarios/lista_usuarios.db
+touch /var/log/mi_panel/acciones.log
 
 # Asignar permisos
 chmod -R 700 /etc/mi_panel
@@ -65,7 +67,11 @@ Todas las acciones son registradas
 =============================================
 EOF
 
-# Descargar o crear el menú de administración
+# 🧹 BORRAR VERSIONES ANTERIORES (para evitar conflictos)
+rm -f /usr/bin/menu_admin
+rm -f /usr/bin/menu
+
+# ✅ MENÚ CORREGIDO SIN ERRORES
 echo -e "${AMARILLO}📋 Generando menú de administración...${NC}"
 cat > /usr/bin/menu_admin << 'EOF'
 #!/bin/bash
@@ -92,7 +98,7 @@ registrar() {
     echo "[$(date +%Y-%m-%d\ %H:%M:%S)] $1" >> "$LOGS"
 }
 
-# Función para pausar
+# Función para pausa (CORREGIDA)
 pausa() {
     echo -e "\n${CYAN}Presiona Enter para continuar...${NC}"
     read -r
