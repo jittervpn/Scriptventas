@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # ================================================================
 # JITTER PANEL SSH v3.1 - INSTALADOR COMPLETO
@@ -24,201 +25,256 @@ LOGO
 echo -e "${P} █ JITTER PANEL SSH v3.1 - INSTALADOR █${N}"
 echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
 echo ""
+echo -e "${WHITE}     SISTEMA DE ADMINISTRACIÓN - INSTALADOR${NC}"
+echo -e "${CYAN}================================================================${NC}"
+echo ""
 
-echo -e " ${B}▸${N} ${W}Instalando dependencias...${N}"
-apt update -y >/dev/null 2>&1
-apt install -y curl wget net-tools ufw openssh-server dropbear stunnel4 squid >/dev/null 2>&1
+[[ $EUID -ne 0 ]] && echo -e "${RED}[!] Ejecutar como root${NC}" && exit 1
 
-echo -e " ${B}▸${N} ${W}Configurando estructura...${N}"
-mkdir -p /etc/jitterpanel /var/log/jitterpanel
+# ── Obtener IP del VPS admin ───────────────────────────────────
+MY_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+echo -e " ${WHITE}IP de este VPS:${NC} ${CYAN}$MY_IP${NC}"
+echo ""
 
-# ── CREAR EL MENÚ ADMIN ──────────────────────────────────────
-cat > /usr/bin/menu << 'MENU'
-#!/bin/bash
-# COLORES
-P='\033[0;35m'; V='\033[1;35m'; R='\033[0;91m'; G='\033[0;92m'
-Y='\033[1;93m'; B='\033[0;94m'; C='\033[0;96m'; W='\033[1;97m'; N='\033[0m'
+# ── Solicitar datos de configuración ──────────────────────────
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHITE} Necesito algunos datos para configurar el sistema:${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
 
-[[ $(id -u)!= 0 ]] && { echo -e "${R}Ejecutar como root: sudo menu${N}"; exit 1; }
-
-pausa() {
-    echo ""
-    read -p " Presiona ENTER para continuar..."
-}
-
-banner() {
-    clear
-    echo -e "${V}"
-    echo ' ██╗██╗████████╗████████╗███████╗██████╗'
-    echo ' ██║██║╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗'
-    echo ' ██║██║ ██║ ██║ █████╗ ██████╔╝'
-    echo ' ██ ██║██║ ██║ ██║ ██╔══╝ ██╔══██╗'
-    echo ' ╚█████╔╝██║ ██║ ██║ ███████╗██║ ██║'
-    echo ' ╚════╝ ╚═╝ ╚═╝ ╚═╝ ╚══════╝╚═╝ ╚═╝'
-    echo -e "${P} █ JITTER PANEL SSH v3.1 █${N}"
-    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-    echo -e " ${W}IP: ${C}$(curl -s ifconfig.me)${N} ${W}OS: ${C}$(lsb_release -ds 2>/dev/null)${N}"
-    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-}
-
-crear_usuario() {
-    banner
-    echo -e "${P}[1] CREAR USUARIO SSH${N}"
-    echo ""
-    read -p " ${B}▸${N} ${W}Usuario: ${N}" user
-    [[ -z "$user" ]] && { echo -e " ${R}Usuario vacío${N}"; pausa; return; }
-    read -p " ${B}▸${N} ${W}Contraseña: ${N}" pass
-    read -p " ${B}▸${N} ${W}Días para expirar: ${N}" dias
-    read -p " ${B}▸${N} ${W}Límite de conexiones: ${N}" limit
-
-    dias=${dias:-30}
-    limit=${limit:-1}
-    exp=$(date -d "+$dias days" +"%Y-%m-%d")
-
-    useradd -M -s /bin/false -e "$exp" "$user" 2>/dev/null
-    echo "$user:$pass" | chpasswd
-    echo "$user $limit" >> /etc/jitterpanel/limites
-
-    echo ""
-    echo -e " ${G}✓ Usuario creado${N}"
-    echo -e " ${W}Usuario:${N} $user"
-    echo -e " ${W}Clave:${N} $pass"
-    echo -e " ${W}Expira:${N} $exp"
-    echo -e " ${W}Límite:${N} $limit"
-    pausa
-}
-
-eliminar_usuario() {
-    banner
-    echo -e "${P}[2] ELIMINAR USUARIO${N}"
-    echo ""
-    echo -e "${W}Usuarios activos:${N}"
-    cut -d: -f1 /etc/passwd | grep -vE '^(root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody|systemd|messagebus|syslog|_apt|lxd|uuidd|dnsmasq|landscape|pollinate|sshd)' | nl
-    echo ""
-    read -p " ${B}▸${N} ${W}Usuario a eliminar: ${N}" user
-    [[ -z "$user" ]] && { pausa; return; }
-
-    pkill -u "$user" 2>/dev/null
-    userdel "$user" 2>/dev/null
-    sed -i "/^$user /d" /etc/jitterpanel/limites
-
-    echo -e " ${G}✓ Usuario $user eliminado${N}"
-    pausa
-}
-
-listar_usuarios() {
-    banner
-    echo -e "${P}[3] USUARIOS CONECTADOS${N}"
-    echo ""
-    printf "${W}%-15s %-10s %-10s %-15s${N}\n" "USUARIO" "LIMITE" "CONECTADOS" "EXPIRA"
-    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-
-    while IFS= read -r line; do
-        user=$(echo "$line" | cut -d: -f1)
-        exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2)
-        limit=$(grep "^$user " /etc/jitterpanel/limites 2>/dev/null | awk '{print $2}')
-        limit=${limit:-0}
-        online=$(ps -u "$user" | grep -c sshd)
-        printf "%-15s %-10s %-10s %-15s\n" "$user" "$limit" "$online" "$exp"
-    done < <(cut -d: -f1 /etc/passwd | grep -vE '^(root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody|systemd|messagebus|syslog|_apt|lxd|uuidd|dnsmasq|landscape|pollinate|sshd)')
-    pausa
-}
-
-cambiar_puerto() {
-    banner
-    echo -e "${P}[4] CAMBIAR PUERTOS${N}"
-    echo ""
-    echo -e " ${W}1.${N} SSH: $(grep Port /etc/ssh/sshd_config | awk '{print $2}' | head -1)"
-    echo -e " ${W}2.${N} Dropbear: $(grep DROPBEAR_PORT /etc/default/dropbear | cut -d= -f2)"
-    echo -e " ${W}3.${N} SSL: $(grep accept /etc/stunnel/stunnel.conf 2>/dev/null | awk '{print $3}' | head -1)"
-    echo ""
-    read -p " ${B}▸${N} ${W}Opción [1-3]: ${N}" opt
-    read -p " ${B}▸${N} ${W}Nuevo puerto: ${N}" puerto
-
-    case $opt in
-        1) sed -i "s/Port.*/Port $puerto/" /etc/ssh/sshd_config
-           ufw allow $puerto/tcp >/dev/null 2>&1
-           systemctl restart sshd ;;
-        2) sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=$puerto/" /etc/default/dropbear
-           ufw allow $puerto/tcp >/dev/null 2>&1
-           systemctl restart dropbear ;;
-        3) sed -i "s/accept =.*/accept = $puerto/" /etc/stunnel/stunnel.conf
-           ufw allow $puerto/tcp >/dev/null 2>&1
-           systemctl restart stunnel4 ;;
-    esac
-    echo -e " ${G}✓ Puerto cambiado a $puerto${N}"
-    pausa
-}
-
-cambiar_banner() {
-    banner
-    echo -e "${P}[5] CAMBIAR BANNER SSH${N}"
-    echo ""
-    echo -e " ${W}Pega tu banner y termina con CTRL+D:${N}"
-    cat > /etc/jitterpanel/banner
-    echo "Banner /etc/jitterpanel/banner" >> /etc/ssh/sshd_config
-    systemctl restart sshd
-    echo -e " ${G}✓ Banner actualizado${N}"
-    pausa
-}
-
-ver_ip() {
-    banner
-    echo -e "${P}[6] INFORMACIÓN DEL VPS${N}"
-    echo ""
-    echo -e " ${W}IP Pública:${N} ${C}$(curl -s ifconfig.me)${N}"
-    echo -e " ${W}IP Local:${N} ${C}$(hostname -I | awk '{print $1}')${N}"
-    echo -e " ${W}Hostname:${N} ${C}$(hostname)${N}"
-    echo -e " ${W}Uptime:${N} ${C}$(uptime -p)${N}"
-    echo -e " ${W}OS:${N} ${C}$(lsb_release -ds 2>/dev/null)${N}"
-    pausa
-}
-
-# MENU PRINCIPAL
-while true; do
-    banner
-    echo -e "${P}[1]${N} ${W}Crear usuario SSH${N}"
-    echo -e "${P}[2]${N} ${W}Eliminar usuario${N}"
-    echo -e "${P}[3]${N} ${W}Listar usuarios conectados${N}"
-    echo -e "${P}[4]${N} ${W}Cambiar puertos${N}"
-    echo -e "${P}[5]${N} ${W}Cambiar Banner SSH${N}"
-    echo -e "${P}[6]${N} ${W}Ver IP/Info del VPS${N}"
-    echo -e "${P}[0]${N} ${R}Salir${N}"
-    echo -e "${V}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-    read -p " ${B}▸${N} ${W}Opción: ${N}" opcao
-
-    case $opcao in
-        1) crear_usuario ;;
-        2) eliminar_usuario ;;
-        3) listar_usuarios ;;
-        4) cambiar_puerto ;;
-        5) cambiar_banner ;;
-        6) ver_ip ;;
-        0) exit 0 ;;
-        *) echo -e " ${R}Opción inválida${N}"; sleep 1 ;;
-    esac
-done
-MENU
-
-chmod +x /usr/bin/menu
-ln -sf /usr/bin/menu_admin 2>/dev/null
-
-# CONFIGURAR SSH
-sed -i 's/#Port 22/Port 22/' /etc/ssh/sshd_config
-sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-systemctl restart sshd
-
-# FIREWALL
-ufw allow 22/tcp >/dev/null 2>&1
-ufw allow 80/tcp >/dev/null 2>&1
-ufw allow 443/tcp >/dev/null 2>&1
-ufw --force enable >/dev/null 2>&1
+# 1. Token del bot de Telegram
+echo -e "${WHITE}[1/4] TOKEN del Bot de Telegram${NC}"
+echo -e "      ${CYAN}→ Ve a Telegram, busca @BotFather${NC}"
+echo -e "      ${CYAN}→ Escribe /newbot, pon un nombre, obtendrás el token${NC}"
+echo -e "      ${CYAN}→ Formato: 1234567890:ABCdefGHIjklMNO...${NC}"
+echo ""
+echo -ne " ${WHITE}Pega tu BOT TOKEN: ${NC}"
+read BOT_TOKEN
+if [[ -z "$BOT_TOKEN" ]]; then
+    echo -e "${RED}[!] Token requerido${NC}"; exit 1
+fi
 
 echo ""
-echo -e "${V}╔══════════════════════════════════════════════════════════════╗${N}"
-echo -e "${V}║${N} ${W}✓ INSTALACIÓN COMPLETADA${N} ${V}║${N}"
-echo -e "${V}╠══════════════════════════════════════════════════════════════╣${N}"
-echo -e "${V}║${N} ${W}Usa el comando:${N} ${C}sudo menu${N} ${V}║${N}"
-echo -e "${V}║${N} ${W}o también:${N} ${C}menu${N} ${V}║${N}"
-echo -e "${V}╚══════════════════════════════════════════════════════════════╝${N}"
+
+# 2. Telegram ID del admin
+echo -e "${WHITE}[2/4] Tu TELEGRAM ID (número)${NC}"
+echo -e "      ${CYAN}→ Ve a Telegram, busca @userinfobot${NC}"
+echo -e "      ${CYAN}→ Escríbele /start${NC}"
+echo -e "      ${CYAN}→ Te dirá tu ID: ej. 123456789${NC}"
+echo ""
+echo -ne " ${WHITE}Tu Telegram ID: ${NC}"
+read ADMIN_ID
+if [[ -z "$ADMIN_ID" ]]; then
+    echo -e "${RED}[!] ID requerido${NC}"; exit 1
+fi
+
+echo ""
+
+# 3. Token secreto de admin (lo inventa el usuario)
+echo -e "${WHITE}[3/4] Token secreto de administración${NC}"
+echo -e "      ${CYAN}→ Inventa una contraseña segura para proteger el servidor${NC}"
+echo -e "      ${CYAN}→ Ej: MiClaveSecreta2024 (guárdala, no la pierdas)${NC}"
+echo ""
+echo -ne " ${WHITE}Token secreto (o Enter para generar uno): ${NC}"
+read ADMIN_TOKEN
+if [[ -z "$ADMIN_TOKEN" ]]; then
+    ADMIN_TOKEN=$(openssl rand -hex 16)
+    echo -e " ${GREEN}Token generado: ${CYAN}$ADMIN_TOKEN${NC}"
+    echo -e " ${YELLOW}⚠️  Guárdalo en un lugar seguro${NC}"
+fi
+
+echo ""
+
+# 4. Puerto del servidor de licencias
+echo -e "${WHITE}[4/4] Puerto del servidor de licencias${NC}"
+echo -e "      ${CYAN}→ Por defecto: 3000 (puedes cambiarlo)${NC}"
+echo ""
+echo -ne " ${WHITE}Puerto (Enter = 3000): ${NC}"
+read LIC_PORT
+[[ -z "$LIC_PORT" ]] && LIC_PORT=3000
+
+echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHITE} Configuración:${NC}"
+echo -e "  Bot Token:    ${CYAN}${BOT_TOKEN:0:20}...${NC}"
+echo -e "  Admin ID:     ${CYAN}$ADMIN_ID${NC}"
+echo -e "  Admin Token:  ${CYAN}$ADMIN_TOKEN${NC}"
+echo -e "  Puerto:       ${CYAN}$LIC_PORT${NC}"
+echo -e "  URL servidor: ${CYAN}http://$MY_IP:$LIC_PORT${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -ne "${YELLOW}¿Continuar con esta configuración? (s/n): ${NC}"
+read CONFIRM
+[[ "$CONFIRM" != "s" && "$CONFIRM" != "S" ]] && echo "Cancelado." && exit 0
+
+echo ""
+
+# ── Instalar dependencias ──────────────────────────────────────
+echo -e "${CYAN}[1/4] Instalando dependencias...${NC}"
+apt update -y -qq 2>/dev/null
+apt install -y -qq curl wget git ufw 2>/dev/null
+
+# Node.js 18
+if ! command -v node &>/dev/null; then
+    echo -e "  → Instalando Node.js 18..."
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - 2>/dev/null
+    apt install -y nodejs 2>/dev/null
+fi
+echo -e "  ${GREEN}✓ Node.js $(node -v)${NC}"
+
+# PM2
+if ! command -v pm2 &>/dev/null; then
+    echo -e "  → Instalando PM2..."
+    npm install -g pm2 -q 2>/dev/null
+fi
+echo -e "  ${GREEN}✓ PM2 instalado${NC}"
+
+# ── Crear directorio del sistema ───────────────────────────────
+echo -e "${CYAN}[2/4] Creando estructura...${NC}"
+mkdir -p /opt/netgetk/{license-server/data,bot}
+
+# ── Descargar archivos ─────────────────────────────────────────
+REPO="https://raw.githubusercontent.com/NETGETK/NETGETK-Script/main"
+
+echo -e "  → Descargando license-server..."
+wget -q -O /opt/netgetk/license-server/server.js "$REPO/license-server/server.js" 2>/dev/null
+wget -q -O /opt/netgetk/license-server/package.json "$REPO/license-server/package.json" 2>/dev/null
+
+echo -e "  → Descargando bot..."
+wget -q -O /opt/netgetk/bot/bot.js "$REPO/bot/bot.js" 2>/dev/null
+wget -q -O /opt/netgetk/bot/package.json "$REPO/bot/package.json" 2>/dev/null
+
+# Si el repo no existe aún, crear los archivos localmente
+# (el ZIP ya los tiene, copiarlos si están en /tmp)
+if [[ ! -s /opt/netgetk/license-server/server.js ]]; then
+    echo -e "  ${YELLOW}→ Repo no disponible, usando archivos locales...${NC}"
+    # El usuario debe tener los archivos del ZIP
+    [[ -f /tmp/NETGETK/license-server/server.js ]] && \
+        cp -r /tmp/NETGETK/license-server/* /opt/netgetk/license-server/
+    [[ -f /tmp/NETGETK/bot/bot.js ]] && \
+        cp -r /tmp/NETGETK/bot/* /opt/netgetk/bot/
+fi
+
+# ── Guardar configuración en .env ─────────────────────────────
+cat > /opt/netgetk/license-server/.env << ENV
+PORT=$LIC_PORT
+ADMIN_TOKEN=$ADMIN_TOKEN
+ENV
+
+cat > /opt/netgetk/bot/.env << ENV
+BOT_TOKEN=$BOT_TOKEN
+ADMIN_IDS=$ADMIN_ID
+LICENSE_SERVER=http://127.0.0.1:$LIC_PORT
+ADMIN_TOKEN=$ADMIN_TOKEN
+ENV
+
+# Guardar config general
+cat > /opt/netgetk/config << CFG
+MY_IP=$MY_IP
+LIC_PORT=$LIC_PORT
+ADMIN_TOKEN=$ADMIN_TOKEN
+ADMIN_ID=$ADMIN_ID
+LICENSE_SERVER_URL=http://$MY_IP:$LIC_PORT
+INSTALLED=$(date +%Y-%m-%d)
+CFG
+
+chmod 600 /opt/netgetk/config /opt/netgetk/license-server/.env /opt/netgetk/bot/.env
+
+# ── Instalar dependencias npm ──────────────────────────────────
+echo -e "${CYAN}[3/4] Instalando paquetes npm...${NC}"
+cd /opt/netgetk/license-server && npm install --silent 2>/dev/null
+echo -e "  ${GREEN}✓ License server listo${NC}"
+cd /opt/netgetk/bot && npm install --silent 2>/dev/null
+cd /etc/gtkvpn/panel && npm install --silent 2>/dev/null
+echo -e "  ${GREEN}✓ Bot listo${NC}"
+
+# ── Iniciar con PM2 ───────────────────────────────────────────
+echo -e "${CYAN}[4/4] Iniciando servicios...${NC}"
+
+# License Server
+pm2 delete netgetk-license 2>/dev/null
+cd /opt/netgetk/license-server
+pm2 start server.js --name netgetk-license \
+    --env production \
+    --node-args "--env-file .env" 2>/dev/null || \
+pm2 start server.js --name netgetk-license 2>/dev/null
+
+sleep 2
+
+# Verificar que inició
+if pm2 list | grep -q "netgetk-license.*online"; then
+    echo -e "  ${GREEN}✓ License Server corriendo en :$LIC_PORT${NC}"
+else
+    # Método alternativo con env
+    PORT=$LIC_PORT ADMIN_TOKEN=$ADMIN_TOKEN pm2 start server.js \
+        --name netgetk-license 2>/dev/null
+    sleep 2
+fi
+
+# Bot de Telegram
+pm2 delete netgetk-bot 2>/dev/null
+cd /opt/netgetk/bot
+BOT_TOKEN=$BOT_TOKEN ADMIN_IDS=$ADMIN_ID \
+LICENSE_SERVER="http://127.0.0.1:$LIC_PORT" \
+ADMIN_TOKEN=$ADMIN_TOKEN \
+pm2 start bot.js --name netgetk-bot 2>/dev/null
+
+sleep 3
+
+pm2 save 2>/dev/null
+pm2 startup 2>/dev/null | tail -1 | bash 2>/dev/null
+
+# ── Abrir puerto en UFW ────────────────────────────────────────
+ufw allow $LIC_PORT/tcp 2>/dev/null
+ufw allow 22/tcp 2>/dev/null
+ufw --force enable 2>/dev/null
+
+# ── Guardar comando de instalación para clientes ───────────────
+LICENSE_URL="http://$MY_IP:$LIC_PORT"
+
+# Actualizar la URL en el setup del script
+# (El usuario debe hacer esto en el archivo setup antes de subir a GitHub)
+
+echo ""
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║           ✓ SISTEMA INSTALADO CORRECTAMENTE                   ║${NC}"
+echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  ${WHITE}📡 License Server:${NC} ${CYAN}http://$MY_IP:$LIC_PORT${NC}"
+echo -e "${GREEN}║${NC}  ${WHITE}🤖 Bot Telegram:${NC}   ${GREEN}Activo${NC}"
+echo -e "${GREEN}║${NC}"
+echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GREEN}║${NC}  ${YELLOW}⚠️  IMPORTANTE - Guarda esto:${NC}"
+echo -e "${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  Admin Token: ${CYAN}$ADMIN_TOKEN${NC}"
+echo -e "${GREEN}║${NC}  License URL: ${CYAN}http://$MY_IP:$LIC_PORT${NC}"
+echo -e "${GREEN}║${NC}"
+echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GREEN}║${NC}  ${WHITE}📝 Antes de subir a GitHub, edita script/setup:${NC}"
+echo -e "${GREEN}║${NC}  ${CYAN}LICENSE_SERVER=\"http://$MY_IP:$LIC_PORT\"${NC}"
+echo -e "${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  ${WHITE}🤖 Prueba el bot en Telegram - escribe /stats${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+# ── Crear comando 'netgetk' ────────────────────────────────────
+cat > /usr/local/bin/netgetk << 'CMD'
+#!/bin/bash
+echo ""
+echo "⚡ NETGETK Admin"
+echo ""
+echo "  pm2 status              → ver servicios"
+echo "  pm2 logs netgetk-bot    → logs del bot"
+echo "  pm2 logs netgetk-license → logs del servidor"
+echo "  pm2 restart netgetk-bot → reiniciar bot"
+echo ""
+source /opt/netgetk/config 2>/dev/null
+echo "  License Server: http://$MY_IP:$LIC_PORT"
+echo ""
+pm2 list --no-color | grep netgetk
+echo ""
+CMD
+chmod +x /usr/local/bin/netgetk
+
+echo -e " ${CYAN}Usa el comando${NC} ${WHITE}netgetk${NC} ${CYAN}para ver el estado del sistema${NC}"
 echo ""
